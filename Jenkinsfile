@@ -83,9 +83,9 @@ pipeline {
         stage('Scan with Trivy') {
             steps {
                 echo 'Scanning Docker image with Trivy...'
-                sh 'trivy image --format json --output trivy-report.json --severity HIGH,CRITICAL $IMAGE_NAME:$BUILD_NUMBER'
-                sh 'trivy image --format spdx-json --output sbom-spdx.json $IMAGE_NAME:$BUILD_NUMBER'
-                sh 'trivy image --format table --severity HIGH,CRITICAL $IMAGE_NAME:$BUILD_NUMBER'
+                sh 'trivy image --cache-dir "$WORKSPACE/.trivycache" --format json --output trivy-report.json --severity HIGH,CRITICAL $IMAGE_NAME:$BUILD_NUMBER'
+                sh 'trivy image --cache-dir "$WORKSPACE/.trivycache" --format spdx-json --output sbom-spdx.json $IMAGE_NAME:$BUILD_NUMBER'
+                sh 'trivy image --cache-dir "$WORKSPACE/.trivycache" --format table --severity HIGH,CRITICAL $IMAGE_NAME:$BUILD_NUMBER'
             }
             post {
                 always {
