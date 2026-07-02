@@ -1,144 +1,109 @@
 // =====================================================================
 //  Pipeline CI/CD - TaskList FRONTEND (React + Vite + TypeScript)
+//  Cible : infrastructure Jenkins de l'école (agents avec Node, Docker
+//  et Trivy préinstallés ; serveur SonarQube "sonarqube-server-1").
 // ---------------------------------------------------------------------
-//  Prérequis sur l'agent Jenkins :
-//    - Node.js 22 (outil "NodeJS-22" configuré dans Jenkins, ou node/npm sur le PATH)
-//    - Docker (démon accessible depuis l'agent)
-//    - Un scanner SonarQube ("SonarScanner" dans les Global Tool Configuration)
-//  Credentials Jenkins attendus (jamais en clair dans le code) :
-//    - dockerhub-credentials : type "Username with password" (login Docker Hub)
-//    - sonar-token           : type "Secret text" (token SonarQube)
-//  Serveur SonarQube déclaré sous le nom "SonarQube" (Manage Jenkins > System).
+//  Credential Jenkins requis (jamais en clair dans le code) :
+//    - dockerhub-credentials : "Username with password" (login Docker Hub)
+//  Le token SonarQube est injecté automatiquement par withSonarQubeEnv.
 // =====================================================================
 
 pipeline {
     agent any
-
-    tools {
-        nodejs 'NodeJS-22'
-    }
-
-    environment {
-        IMAGE_NAME = 'tasklist-frontend'
-        SONAR_SCANNER = tool 'SonarScanner'
-    }
 
     options {
         timestamps()
         timeout(time: 30, unit: 'MINUTES')
     }
 
+    environment {
+        IMAGE_NAME = 'tommyk78/tasklist-frontend-exam'
+    }
+
     stages {
 
         stage('Checkout') {
             steps {
+                echo 'Checking out repository...'
                 checkout scm
             }
         }
 
-        stage('Install dependencies') {
+        stage('Install Dependencies') {
             steps {
-                sh 'npm ci'
+                echo 'Installing dependencies...'
+                sh 'npm ci --include=dev'
             }
         }
 
-        stage('Tests unitaires + couverture') {
+        stage('Unit Tests') {
             steps {
+                echo 'Running unit tests with coverage...'
                 sh 'npm run test:coverage'
             }
             post {
                 always {
-                    // Publication du rapport de tests JUnit dans Jenkins
                     junit 'reports/junit.xml'
-                }
-            }
-        }
-
-        stage('Analyse SonarQube') {
-            steps {
-                withSonarQubeEnv('SonarQube') {
-                    withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                        sh '${SONAR_SCANNER}/bin/sonar-scanner -Dsonar.token=$SONAR_TOKEN'
-                    }
-                }
-            }
-        }
-
-        stage('Quality Gate') {
-            steps {
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
                 }
             }
         }
 
         stage('Build') {
             steps {
+                echo 'Building React/Vite project...'
                 sh 'npm run build'
-                archiveArtifacts artifacts: 'dist/**', fingerprint: true
             }
         }
 
-        stage('Build image Docker') {
+        stage('SonarQube Analysis') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
-                                                   usernameVariable: 'DOCKER_USER',
-                                                   passwordVariable: 'DOCKER_PASS')]) {
-                    sh '''
-                        docker build -t $DOCKER_USER/$IMAGE_NAME:$BUILD_NUMBER \
-                                     -t $DOCKER_USER/$IMAGE_NAME:latest .
-                    '''
+                echo 'Running SonarQube analysis...'
+                withSonarQubeEnv('sonarqube-server-1') {
+                    sh 'npx sonarqube-scanner'
                 }
             }
         }
 
-        stage('Scan sécurité (Trivy)') {
+        stage('SonarQube Quality Gate') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
-                                                   usernameVariable: 'DOCKER_USER',
-                                                   passwordVariable: 'DOCKER_PASS')]) {
-                    sh '''
-                        docker run --rm \
-                          -v /var/run/docker.sock:/var/run/docker.sock \
-                          -v $PWD:/work -w /work \
-                          aquasec/trivy:latest image \
-                          --severity HIGH,CRITICAL \
-                          --exit-code 0 \
-                          --no-progress \
-                          $DOCKER_USER/$IMAGE_NAME:$BUILD_NUMBER
-                    '''
+                echo 'Checking SonarQube Quality Gate...'
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
 
-        stage('SBOM (SPDX)') {
+        stage('Build Docker Image') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
-                                                   usernameVariable: 'DOCKER_USER',
-                                                   passwordVariable: 'DOCKER_PASS')]) {
-                    sh '''
-                        docker run --rm \
-                          -v /var/run/docker.sock:/var/run/docker.sock \
-                          -v $PWD:/work -w /work \
-                          aquasec/trivy:latest image \
-                          --format spdx-json \
-                          --output sbom-spdx.json \
-                          $DOCKER_USER/$IMAGE_NAME:$BUILD_NUMBER
-                    '''
-                    archiveArtifacts artifacts: 'sbom-spdx.json', fingerprint: true
+                echo 'Building Docker image...'
+                sh 'docker build -t $IMAGE_NAME:$BUILD_NUMBER -t $IMAGE_NAME:latest -f Dockerfile .'
+            }
+        }
+
+        stage('Scan with Trivy') {
+            steps {
+                echo 'Scanning Docker image with Trivy...'
+                sh 'trivy image --format json --output trivy-report.json --severity HIGH,CRITICAL $IMAGE_NAME:$BUILD_NUMBER'
+                sh 'trivy image --format spdx-json --output sbom-spdx.json $IMAGE_NAME:$BUILD_NUMBER'
+                sh 'trivy image --format table --severity HIGH,CRITICAL $IMAGE_NAME:$BUILD_NUMBER'
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-report.json, sbom-spdx.json', fingerprint: true, allowEmptyArchive: true
                 }
             }
         }
 
-        stage('Publication Docker Hub') {
+        stage('Publish to Docker Hub') {
             steps {
+                echo 'Publishing image to Docker Hub...'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
                                                    usernameVariable: 'DOCKER_USER',
                                                    passwordVariable: 'DOCKER_PASS')]) {
                     sh '''
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push $DOCKER_USER/$IMAGE_NAME:$BUILD_NUMBER
-                        docker push $DOCKER_USER/$IMAGE_NAME:latest
+                        docker push $IMAGE_NAME:$BUILD_NUMBER
+                        docker push $IMAGE_NAME:latest
                         docker logout
                     '''
                 }
@@ -148,15 +113,14 @@ pipeline {
 
     post {
         always {
-            // Nettoyage : suppression des images locales pour ne pas saturer l'agent
-            sh 'docker image prune -f || true'
+            echo 'Cleaning up workspace...'
             cleanWs()
         }
         success {
-            echo '✅ Pipeline frontend terminé avec succès.'
+            echo 'Pipeline completed successfully!'
         }
         failure {
-            echo '❌ Échec du pipeline frontend.'
+            echo 'Pipeline failed.'
         }
     }
 }
