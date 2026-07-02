@@ -16,15 +16,14 @@ const mockTask = {
 	updatedAt: '2026-01-15T10:00:00Z',
 };
 
-// Petit utilitaire pour fabriquer une fausse réponse fetch
-function mockFetch(response: { ok?: boolean; status?: number; jsonData?: unknown }) {
+function mockFetchOnce(body: unknown, ok = true, status = 200) {
 	vi.stubGlobal(
 		'fetch',
 		vi.fn().mockResolvedValue({
-			ok: response.ok ?? true,
-			status: response.status ?? 200,
-			json: () => Promise.resolve(response.jsonData),
-			text: () => Promise.resolve('error body'),
+			ok,
+			status,
+			json: () => Promise.resolve(body),
+			text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
 		})
 	);
 }
@@ -34,67 +33,83 @@ beforeEach(() => {
 });
 
 describe('taskApi', () => {
-	it('getTasks returns array', async () => {
-		mockFetch({ ok: true, jsonData: [mockTask] });
+	describe('getTasks', () => {
+		it('retourne le tableau de tâches', async () => {
+			mockFetchOnce([mockTask]);
 
-		const tasks = await getTasks();
+			const tasks = await getTasks();
 
-		expect(tasks).toEqual([mockTask]);
-		expect(fetch).toHaveBeenCalledWith('/api/tasks');
+			expect(tasks).toEqual([mockTask]);
+			expect(fetch).toHaveBeenCalledWith('/api/tasks');
+		});
+
+		it('lève une erreur si la réponse HTTP est en échec', async () => {
+			mockFetchOnce('Internal error', false, 500);
+
+			await expect(getTasks()).rejects.toThrow('HTTP 500');
+		});
 	});
 
-	it('getTasks throws on HTTP error', async () => {
-		mockFetch({ ok: false, status: 500 });
+	describe('getTask', () => {
+		it('appelle le bon endpoint avec l’identifiant', async () => {
+			mockFetchOnce(mockTask);
 
-		await expect(getTasks()).rejects.toThrow('HTTP 500');
+			const task = await getTask(1);
+
+			expect(task).toEqual(mockTask);
+			expect(fetch).toHaveBeenCalledWith('/api/tasks/1');
+		});
 	});
 
-	it('getTask returns a single task', async () => {
-		mockFetch({ ok: true, jsonData: mockTask });
+	describe('createTask', () => {
+		it('envoie une requête POST avec le bon corps', async () => {
+			mockFetchOnce(mockTask);
 
-		const task = await getTask(1);
+			const task = await createTask({ title: 'Test' });
 
-		expect(task).toEqual(mockTask);
-		expect(fetch).toHaveBeenCalledWith('/api/tasks/1');
+			expect(task).toEqual(mockTask);
+			expect(fetch).toHaveBeenCalledWith('/api/tasks', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ title: 'Test' }),
+			});
+		});
+
+		it('propage l’erreur HTTP', async () => {
+			mockFetchOnce('Bad request', false, 400);
+
+			await expect(createTask({ title: '' })).rejects.toThrow('HTTP 400');
+		});
 	});
 
-	it('createTask sends a POST and returns the task', async () => {
-		mockFetch({ ok: true, jsonData: mockTask });
+	describe('updateTask', () => {
+		it('envoie une requête PUT avec le bon corps', async () => {
+			const updated = { ...mockTask, completed: true };
+			mockFetchOnce(updated);
 
-		const task = await createTask({ title: 'Test' });
+			const task = await updateTask(1, { completed: true });
 
-		expect(task).toEqual(mockTask);
-		expect(fetch).toHaveBeenCalledWith(
-			'/api/tasks',
-			expect.objectContaining({ method: 'POST' })
-		);
+			expect(task).toEqual(updated);
+			expect(fetch).toHaveBeenCalledWith('/api/tasks/1', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ completed: true }),
+			});
+		});
 	});
 
-	it('updateTask sends a PUT and returns the task', async () => {
-		mockFetch({ ok: true, jsonData: { ...mockTask, completed: true } });
+	describe('deleteTask', () => {
+		it('envoie une requête DELETE et se termine sans erreur', async () => {
+			mockFetchOnce(null, true, 204);
 
-		const task = await updateTask(1, { completed: true });
+			await expect(deleteTask(1)).resolves.toBeUndefined();
+			expect(fetch).toHaveBeenCalledWith('/api/tasks/1', { method: 'DELETE' });
+		});
 
-		expect(task.completed).toBe(true);
-		expect(fetch).toHaveBeenCalledWith(
-			'/api/tasks/1',
-			expect.objectContaining({ method: 'PUT' })
-		);
-	});
+		it('lève une erreur si la suppression échoue', async () => {
+			mockFetchOnce('Not found', false, 404);
 
-	it('deleteTask sends a DELETE', async () => {
-		mockFetch({ ok: true });
-
-		await expect(deleteTask(1)).resolves.toBeUndefined();
-		expect(fetch).toHaveBeenCalledWith(
-			'/api/tasks/1',
-			expect.objectContaining({ method: 'DELETE' })
-		);
-	});
-
-	it('deleteTask throws on HTTP error', async () => {
-		mockFetch({ ok: false, status: 404 });
-
-		await expect(deleteTask(1)).rejects.toThrow('HTTP 404');
+			await expect(deleteTask(999)).rejects.toThrow('HTTP 404');
+		});
 	});
 });

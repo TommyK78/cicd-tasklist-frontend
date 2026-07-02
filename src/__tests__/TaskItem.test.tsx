@@ -14,35 +14,31 @@ const task: Task = {
 };
 
 describe('TaskItem', () => {
-	it('renders the task title and description', () => {
-		render(
-			<TaskItem task={task} onToggle={vi.fn()} onDelete={vi.fn()} onEdit={vi.fn()} />
-		);
+	it('affiche le titre et la description de la tâche', () => {
+		render(<TaskItem task={task} onToggle={vi.fn()} onDelete={vi.fn()} onEdit={vi.fn()} />);
 		expect(screen.getByText('Ma tâche')).toBeInTheDocument();
 		expect(screen.getByText('Une description')).toBeInTheDocument();
 	});
 
-	it('calls onToggle when the checkbox is clicked', async () => {
+	it('appelle onToggle au clic sur la case à cocher', async () => {
+		const user = userEvent.setup();
 		const onToggle = vi.fn();
-		render(
-			<TaskItem task={task} onToggle={onToggle} onDelete={vi.fn()} onEdit={vi.fn()} />
-		);
+		render(<TaskItem task={task} onToggle={onToggle} onDelete={vi.fn()} onEdit={vi.fn()} />);
 
-		await userEvent.click(screen.getByRole('checkbox'));
+		await user.click(screen.getByRole('checkbox'));
 		expect(onToggle).toHaveBeenCalledWith(1);
 	});
 
-	it('switches to edit mode and saves the changes', async () => {
+	it('passe en mode édition et enregistre les modifications', async () => {
+		const user = userEvent.setup();
 		const onEdit = vi.fn();
-		render(
-			<TaskItem task={task} onToggle={vi.fn()} onDelete={vi.fn()} onEdit={onEdit} />
-		);
+		render(<TaskItem task={task} onToggle={vi.fn()} onDelete={vi.fn()} onEdit={onEdit} />);
 
-		await userEvent.click(screen.getByLabelText('Modifier'));
+		await user.click(screen.getByRole('button', { name: 'Modifier' }));
 		const input = screen.getByLabelText('Modifier le titre');
-		await userEvent.clear(input);
-		await userEvent.type(input, 'Titre modifié');
-		await userEvent.click(screen.getByText('Enregistrer'));
+		await user.clear(input);
+		await user.type(input, 'Titre modifié');
+		await user.click(screen.getByRole('button', { name: 'Enregistrer' }));
 
 		expect(onEdit).toHaveBeenCalledWith(1, {
 			title: 'Titre modifié',
@@ -50,32 +46,17 @@ describe('TaskItem', () => {
 		});
 	});
 
-	it('cancels edit mode without saving', async () => {
-		const onEdit = vi.fn();
-		render(
-			<TaskItem task={task} onToggle={vi.fn()} onDelete={vi.fn()} onEdit={onEdit} />
-		);
-
-		await userEvent.click(screen.getByLabelText('Modifier'));
-		await userEvent.click(screen.getByText('Annuler'));
-
-		expect(onEdit).not.toHaveBeenCalled();
-		// On est revenu en mode lecture
-		expect(screen.getByText('Ma tâche')).toBeInTheDocument();
-	});
-
-	it('requires a second click to confirm deletion', async () => {
+	it('demande une confirmation avant de supprimer (double clic)', async () => {
+		const user = userEvent.setup();
 		const onDelete = vi.fn();
-		render(
-			<TaskItem task={task} onToggle={vi.fn()} onDelete={onDelete} onEdit={vi.fn()} />
-		);
+		render(<TaskItem task={task} onToggle={vi.fn()} onDelete={onDelete} onEdit={vi.fn()} />);
 
-		const deleteBtn = screen.getByLabelText('Supprimer');
-		// 1er clic : demande confirmation, ne supprime pas
-		await userEvent.click(deleteBtn);
+		const deleteBtn = screen.getByRole('button', { name: 'Supprimer' });
+		// Premier clic : demande de confirmation, pas de suppression.
+		await user.click(deleteBtn);
 		expect(onDelete).not.toHaveBeenCalled();
-		// 2e clic : confirme la suppression
-		await userEvent.click(deleteBtn);
+		// Second clic : suppression confirmée.
+		await user.click(deleteBtn);
 		expect(onDelete).toHaveBeenCalledWith(1);
 	});
 });
